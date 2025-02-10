@@ -3,7 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId, OrderedBulkOperation } = require('mongodb');
+const nodemailer = require("nodemailer");
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -34,6 +35,45 @@ const verifyToken = async (req, res, next) => {
         next();
     });
 };
+//send email using nodemailer
+const sendEmail = (emailAddress, emailData) => {
+    // create transporter
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false, // true for port 465, false for other ports
+      auth: {
+        user: process.env.NODEMAILER_USER,
+        pass: process.env.NODEMAILER_PASS,
+      },
+    });
+    // verify connection
+    transporter.verify((error, success) => {
+      if (error) {
+        console.log(error)
+      } else {
+        console.log('Transporter is ready to emails', success)
+      }
+    })
+    //  transporter.sendMail()
+    const mailBody = {
+      from: process.env.NODEMAILER_USER, // sender address
+      to: emailAddress, // list of receivers
+      subject: emailData?.subject,
+      // text: emailData?.message, // plain text body
+      html: `<p>${emailData?.message}</p>`, // html body
+    }
+    // send email
+    transporter.sendMail(mailBody, (error, info) => {
+      if (error) {
+        console.log(error)
+      } else {
+        // console.log(info)
+        console('Email Sent: ' + info?.response)
+      }
+  
+    })
+  }
 
 
 // MongoDB Connection String
@@ -57,30 +97,30 @@ const sellerCollection = client.db('QuickCart').collection('sellers');
 
 
 
-    // verify admin middleware
-    const verifyAdmin = async (req, res, next) => {
-        const email = req.user?.email;
-        const query = { email }
-        const result = await userCollection.findOne(query)
-        if (!result || result?.role !== 'admin')
-          return res
+// verify admin middleware
+const verifyAdmin = async (req, res, next) => {
+    const email = req.user?.email;
+    const query = { email }
+    const result = await userCollection.findOne(query)
+    if (!result || result?.role !== 'admin')
+        return res
             .status(403)
             .send({ message: 'Forbidden Access ! Admin only Action' })
-        next()
-  
-      }
-      const verifySeller = async (req, res, next) => {
-        const email = req.user?.email;
-        const query = { email }
-        const result = await userCollection.findOne(query)
-        if (!result || result?.role !== 'seller')
-          return res
+    next()
+
+}
+const verifySeller = async (req, res, next) => {
+    const email = req.user?.email;
+    const query = { email }
+    const result = await userCollection.findOne(query)
+    if (!result || result?.role !== 'seller')
+        return res
             .status(403)
             .send({ message: 'Forbidden Access ! Seller only Action' })
-        next()
-  
-      }
-  
+    next()
+
+}
+
 
 
 
@@ -174,26 +214,26 @@ app.get('/users/role/:email', async (req, res) => {
     const email = req.params.email
     const result = await userCollection.findOne({ email })
     res.send({ role: result?.role })
-  })
+})
 // get all user data
-app.get('/all-users/:email', verifyToken,verifyAdmin,  async (req, res) => {
+app.get('/all-users/:email', verifyToken, verifyAdmin, async (req, res) => {
     const email = req.params.email
     const query = { email: { $ne: email } }
     const result = await userCollection.find(query).toArray()
     res.send(result)
-  })
+})
 
 //   update user role :status
-app.patch('/users/role/:email',verifyToken,verifyAdmin,async(req,res)=>{
+app.patch('/users/role/:email', verifyToken, verifyAdmin, async (req, res) => {
     const email = req.params.email;
-    const{ role}=req.body;
-    const filter={email}
+    const { role } = req.body;
+    const filter = { email }
     const updateDoc = {
         $set: { role, status: 'Verified' },
-      };
+    };
 
-      const result=await userCollection.updateOne(filter,updateDoc)
-      res.send(result)
+    const result = await userCollection.updateOne(filter, updateDoc)
+    res.send(result)
 
 
 })
@@ -208,7 +248,7 @@ app.patch('/users/role/:email',verifyToken,verifyAdmin,async(req,res)=>{
 
 
 // seller-----------------------------------------
-app.post('/sellers/:email',verifyToken, async (req, res) => {
+app.post('/sellers/:email', verifyToken, async (req, res) => {
     const email = req.params.email;
     const query = { email };
     const user = req.body;
@@ -231,12 +271,12 @@ app.post('/sellers/:email',verifyToken, async (req, res) => {
     res.send(result);
 });
 // get all seller data in db
-app.get('/sellers', verifyToken,verifyAdmin, async (req, res) => {
+app.get('/sellers', verifyToken, verifyAdmin, async (req, res) => {
     const result = await sellerCollection.find().toArray()
     res.send(result)
 })
 // get a seller by id
-app.get('/seller/:id',verifyToken,verifyAdmin,  async (req, res) => {
+app.get('/seller/:id', verifyToken, verifyAdmin, async (req, res) => {
     const id = req.params.id
     const query = { _id: new ObjectId(id) }
     const result = await sellerCollection.findOne(query)
@@ -262,16 +302,59 @@ app.get('/products/seller', verifyToken, verifySeller, async (req, res) => {
     const email = req.user.email
     const result = await ProductCollection.find({ 'seller.email': email }).toArray()
     res.send(result)
-  })
+})
 
-  // delete a Panjabi from db by seller
-  app.delete('/products/:id', verifyToken, verifySeller, async (req, res) => {
+// delete a Panjabi from db by seller
+app.delete('/products/:id', verifyToken, verifySeller, async (req, res) => {
     const id = req.params.id;
     const query = { _id: new ObjectId(id) }
     const result = await ProductCollection.deleteOne(query)
     res.send(result)
-  })
+})
 
+/// Update product
+app.put("/products/:id", verifyToken, verifySeller, async (req, res) => {
+    const id = req.params.id;
+    const updatedProduct = req.body;
+  
+    const filter = { _id: new ObjectId(id) };
+  
+    // Create the updated document with the fields you want to update
+    const updatedDoc = {
+      $set: {
+        productName: updatedProduct.productName,
+        image: updatedProduct.image,
+        shopName: updatedProduct.shopName,
+        description: updatedProduct.description,
+        quantity: updatedProduct.quantity,
+        price: updatedProduct.price,
+        discountedPrice: updatedProduct.discountedPrice,
+        category: updatedProduct.category,
+        bkashNumber: updatedProduct.bkashNumber,
+        nogodNumber: updatedProduct.nogodNumber,
+        shopPunnumber: updatedProduct.shopPunnumber,
+        sizes: updatedProduct.sizes,
+        seller: updatedProduct.seller,
+        deliveryPrice: updatedProduct.deliveryPrice,
+        discountPercentage: updatedProduct.discountPercentage,
+      },
+    };
+  
+    try {
+      // Update the product in the database
+      const result = await ProductCollection.updateOne(filter, updatedDoc);
+  
+      if (result.modifiedCount > 0) {
+        res.status(200).json({ message: "Product updated successfully!" });
+      } else {
+        res.status(400).json({ message: "No changes made to the product." });
+      }
+    } catch (error) {
+      console.error("Error updating product:", error);
+      res.status(500).json({ message: "An error occurred while updating the product." });
+    }
+  });
+  
 
 
 
@@ -305,9 +388,37 @@ app.get('/product/:id', async (req, res) => {
 //   save order data in db
 app.post('/orders', verifyToken, async (req, res) => {
     const orderInfo = req.body;
-    const result = await OrderCollection.insertOne(orderInfo)
-    res.send(result)
-})
+    const result = await OrderCollection.insertOne(orderInfo);
+
+    if (result?.insertedId) {
+        // কাস্টমারকে ইমেইল পাঠানো
+        await sendEmail(orderInfo.customer?.email, {
+            subject: "🎉 Order Successful!",
+            message: `
+                <h3>Dear ${orderInfo.customer?.email},</h3>
+                <p>Thank you for placing an order with us. Your order is now being processed.</p>
+                <p><strong>Order ID:</strong> ${result.insertedId}</p>
+                <p>We'll notify you once your order is shipped.</p>
+                <br>
+                <p>Best Regards,<br>QuickCart-BD</p>
+            `
+        });
+
+        // বিক্রেতাকে ইমেইল পাঠানো
+        await sendEmail(orderInfo?.seller, {
+            subject: "📦 New Order Received!",
+            message: `
+                <h3>Hello Seller,</h3>
+                <p>You have received a new order from <strong>${orderInfo?.customer?.email}</strong>.</p>
+                <p>Please start processing the order as soon as possible.</p>
+                <br>
+                <p>Thanks,<br>QuickCart-BD</p>
+            `
+        });
+    }
+
+    res.send(result);
+});
 // manage product quantity
 app.patch('/products/quantity/:id', verifyToken, async (req, res) => {
     const id = req.params.id;
@@ -373,6 +484,85 @@ app.get('/customer-orders/:email', verifyToken, async (req, res) => {
 
     res.send(result)
 })
+// // get all   order  for a specific seller
+app.get('/seller-orders/:email', verifyToken, async (req, res) => {
+    const email = req.params.email
+    const query = { seller: email }
+    const result = await OrderCollection.aggregate([
+        {
+            $match: query
+        },
+        {
+            $addFields: {
+
+                productId: { $toObjectId: '$productId' }
+            }
+        },
+        {
+            $lookup: {
+                from: 'products',
+                localField: 'productId',
+                foreignField: '_id',
+                as: 'products'
+            }
+        },
+        { $unwind: '$products' },
+        {
+            $addFields: {
+                name: '$products.productName',
+                image: '$products.image'
+            }
+        },
+        {
+            $project: {
+                products: 0,
+            }
+        }
+
+    ]).toArray()
+
+    res.send(result)
+})
+
+// update a order status
+app.patch('/update-order-status/:id', verifyToken, verifySeller, async (req, res) => {
+    const id = req.params.id;
+    const { status } = req.body;
+
+    // অর্ডার খুঁজে বের করা
+    const orderInfo = await OrderCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!orderInfo) {
+        return res.status(404).send({ message: 'Order not found' });
+    }
+
+    // যদি নতুন status পুরনো status-এর মতো হয়, তাহলে কিছুই হবে না
+    if (orderInfo.status === status) {
+        return res.status(400).send({ message: 'Order status is already updated' });
+    }
+
+    const result = await OrderCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status } }
+    );
+
+    if (result.modifiedCount > 0) {
+        await sendEmail(orderInfo.customer?.email, {
+            subject: "📦 Order Status Updated!",
+            message: `
+                <h3>Dear Customer,</h3>
+                <p>Your order status has been updated to: <strong>${status}</strong>.</p>
+                <p><strong>Order ID:</strong> ${orderInfo._id}</p>
+                <p>Thank you for shopping with us!</p>
+                <br>
+                <p>Best Regards,<br>QuickCart-BD</p>
+            `
+        });
+    }
+
+    res.send(result);
+});
+
 // cancel order
 app.delete('/orders/:id', verifyToken, async (req, res) => {
     const id = req.params.id

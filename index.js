@@ -93,6 +93,7 @@ const userCollection = client.db('QuickCart').collection('users');
 const ProductCollection = client.db('QuickCart').collection('products');
 const OrderCollection = client.db('QuickCart').collection('orders');
 const sellerCollection = client.db('QuickCart').collection('sellers');
+const reviewCollection = client.db('QuickCart').collection('reviews');
 
 
 
@@ -579,7 +580,45 @@ app.delete('/orders/:id', verifyToken, async (req, res) => {
 
 
 
+// Review<------------------------------->
+app.post('/reviews',  async (req, res) => {
+    const review= req.body;
+    const result = await reviewCollection.insertOne(review)
+    res.send(result)
+})
 
+// get a review by id
+app.get('/reviews/product/:productId', async (req, res) => {
+    const productId = req.params.productId;
+    const query = { productId: productId };
+    const reviews = await reviewCollection.find(query).toArray();
+    res.send(reviews);
+});
+
+// Update a review by ID
+app.put('/reviews/:id', async (req, res) => {
+    const id = req.params.id;
+    const updatedReview = req.body.review;
+
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+        $set: {
+            review: updatedReview
+        }
+    };
+
+    const result = await reviewCollection.updateOne(filter, updateDoc);
+    res.send(result);
+});
+
+// Delete a review by ID
+app.delete('/reviews/:id', async (req, res) => {
+    const id = req.params.id;
+    const filter = { _id: new ObjectId(id) };
+
+    const result = await reviewCollection.deleteOne(filter);
+    res.send(result);
+});
 
 
 

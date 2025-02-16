@@ -389,6 +389,10 @@ app.get('/product/:id', async (req, res) => {
 //   save order data in db
 app.post('/orders', verifyToken, async (req, res) => {
     const orderInfo = req.body;
+
+    // 🔥 `orderDate` ফিল্ড যোগ করা
+    orderInfo.orderDate = new Date(); 
+
     const result = await OrderCollection.insertOne(orderInfo);
 
     if (result?.insertedId) {
@@ -399,6 +403,7 @@ app.post('/orders', verifyToken, async (req, res) => {
                 <h3>Dear ${orderInfo.customer?.email},</h3>
                 <p>Thank you for placing an order with us. Your order is now being processed.</p>
                 <p><strong>Order ID:</strong> ${result.insertedId}</p>
+                <p><strong>Order Date:</strong> ${orderInfo.orderDate.toISOString()}</p>
                 <p>We'll notify you once your order is shipped.</p>
                 <br>
                 <p>Best Regards,<br>QuickCart-BD</p>
@@ -411,6 +416,7 @@ app.post('/orders', verifyToken, async (req, res) => {
             message: `
                 <h3>Hello Seller,</h3>
                 <p>You have received a new order from <strong>${orderInfo?.customer?.email}</strong>.</p>
+                <p><strong>Order Date:</strong> ${orderInfo.orderDate.toISOString()}</p>
                 <p>Please start processing the order as soon as possible.</p>
                 <br>
                 <p>Thanks,<br>QuickCart-BD</p>
@@ -420,6 +426,7 @@ app.post('/orders', verifyToken, async (req, res) => {
 
     res.send(result);
 });
+
 // manage product quantity
 app.patch('/products/quantity/:id', verifyToken, async (req, res) => {
     const id = req.params.id;
@@ -581,11 +588,20 @@ app.delete('/orders/:id', verifyToken, async (req, res) => {
 
 
 // Review<------------------------------->
-app.post('/reviews',  async (req, res) => {
-    const review= req.body;
-    const result = await reviewCollection.insertOne(review)
-    res.send(result)
-})
+app.post('/reviews', async (req, res) => {
+    const review = req.body;
+    // বর্তমান তারিখ রিভিউ অবজেক্টে যুক্ত করা হচ্ছে
+    review.date = new Date();
+    
+    const result = await reviewCollection.insertOne(review);
+    res.send(result);
+  });
+  
+app.get('/reviews', async (req, res) => {
+    const result = await reviewCollection.find().sort({ _id: -1 }).limit(6).toArray();
+    res.send(result);
+});
+
 
 // get a review by id
 app.get('/reviews/product/:productId', async (req, res) => {
@@ -624,11 +640,74 @@ app.delete('/reviews/:id', async (req, res) => {
 
 
 
+// admin Statistics
+app.get('/admin-stat', verifyToken, verifyAdmin, async (req, res) => {
+    try {
+        const totalUsers = await userCollection.countDocuments();
+        const totalProducts = await ProductCollection.estimatedDocumentCount();
 
+        // ✅ আজকের তারিখ UTC-তে সেট করা
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0); // 🔥 UTC অনুযায়ী ১২:০০ AM
 
+        const tomorrow = new Date(today);
+        tomorrow.setUTCDate(today.getUTCDate() + 1); // 🔥 পরবর্তী দিন
 
+        // ✅ রাত ১২টা পর্যন্ত Order ফিল্টার করা (seller + orderDate সহ)
+        const todayOrders = await OrderCollection.find({
+            orderDate: { 
+                $gte: today,  
+                $lt: tomorrow
+            }
+        }).project({ _id: 1, price: 1, seller: 1, orderDate: 1 }).toArray(); // 🔥 orderDate সহ দেখাবে
 
+        // ✅ আজকের মোট দাম হিসাব করা
+        const totalPrice = todayOrders.reduce((acc, order) => acc + order.price, 0);
 
+        res.send({ totalUsers, totalProducts, todayOrders, totalPrice });
+
+    } catch (error) {
+        console.error("Error fetching admin statistics:", error);
+        res.status(500).send({ error: "Internal Server Error" });
+    }
+});
+
+// seller-statistics
+// Ensure that verifyToken and verifySeller middlewares are already defined and imported.
+
+app.get('/seller-statistics', verifyToken, verifySeller, async (req, res) => {
+    try {
+        const sellerEmail = req.user.email; // Seller এর ইমেইল
+
+        // Aggregate seller's total orders and total sales (price)
+        const sellerStatistics = await OrderCollection.aggregate([
+            { $match: { seller: sellerEmail } },
+            { 
+                $group: { 
+                    _id: null, 
+                    totalOrders: { $sum: 1 }, 
+                    totalPrice: { $sum: { $toDouble: "$price" } } 
+                } 
+            }
+        ]).toArray();
+
+        // Fetch all orders for this seller, including the nested customer object.
+        const orders = await OrderCollection.find({ seller: sellerEmail })
+            .project({ _id: 1, customer: 1, orderDate: 1, price: 1 })
+            .sort({ orderDate: -1 })
+            .toArray();
+
+        res.send({
+            totalOrders: sellerStatistics[0]?.totalOrders || 0,
+            totalPrice: sellerStatistics[0]?.totalPrice || 0,
+            orders
+        });
+
+    } catch (error) {
+        console.error("Error fetching seller statistics:", error);
+        res.status(500).send({ error: "Internal Server Error" });
+    }
+});
 
 
 
